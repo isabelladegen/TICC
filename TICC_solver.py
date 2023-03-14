@@ -44,7 +44,12 @@ class TICC:
         self.num_blocks = self.window_size + 1
         self.biased = biased
         # training data (left over design): 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
-        self.complete_D_train = None  # gets assigned in fit
+        self.complete_d_train = None  # gets assigned in fit
+
+        # this is a weird design, but it is how it's been done. Predict uses this data, fit sets it
+        self.trained_model = {'computed_covariance': None,
+                              'cluster_mean_stacked_info': None,
+                              'time_series_col_size': None}
         pd.set_option('display.max_columns', 500)
         np.set_printoptions(formatter={'float': lambda x: "{0:0.4f}".format(x)})
         np.random.seed(102)
@@ -76,25 +81,19 @@ class TICC:
 
         # Stack the training data
         # 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
-        self.complete_D_train = self.stack_training_data(times_series_arr, time_series_col_size, num_train_points,
+        self.complete_d_train = self.stack_training_data(times_series_arr, time_series_col_size, num_train_points,
                                                          training_indices)
 
         # Initialization
         # Gaussian Mixture
         gmm = mixture.GaussianMixture(n_components=self.number_of_clusters, covariance_type="full")
-        gmm.fit(self.complete_D_train)
-        clustered_points = gmm.predict(self.complete_D_train)  # -> this is the original starting point
+        gmm.fit(self.complete_d_train)
+        clustered_points = gmm.predict(self.complete_d_train)  # -> this is the original starting point
 
         # ndarray of length observations and values index of cluster the observation belongs to, example (19605)
         # clustered_points = np.random.randint(self.number_of_clusters, size=num_train_points)
         # clustered_points = np.zeros(num_train_points)
         # clustered_points = np.ones(num_train_points)
-        # dictionary with key=cluster index and value 2d ndarray of Toeplitz Matrices for each cluster
-        train_cluster_inverse = {}
-        # dictionary with key=(k,cluster index) e.g (8,0), (8,1)... and value a decimal
-        log_det_values = {}  # log dets of the thetas
-        # dictionary with key=(k,cluster index) and value covariance matrix, if you calculate np.linalg.inv(computed_covariance) you get train_cluster_inverse, this is sparse
-        computed_covariance = {}
 
         old_clustered_points = None  # points from last iteration
 
@@ -108,26 +107,25 @@ class TICC:
             # dictionary of key=cluster index and value=total number of observations in that cluster
             len_train_clusters = {k: len(train_clusters_arr[k]) for k in range(self.number_of_clusters)}
 
-            # train_clusters holds the indices in complete_D_train
-            # for each of the clusters
             # opt_res is list of k (8) ndarrays of length 465
-            opt_res, cluster_mean_stacked_info = self.train_clusters(self.complete_D_train,
-                                                                     len_train_clusters,
-                                                                     time_series_col_size,
-                                                                     train_clusters_arr)
+            opt_res, cluster_mean_stacked_info = self.train_clusters(self.complete_d_train, len_train_clusters,
+                                                                     time_series_col_size, train_clusters_arr)
 
-            self.optimize_clusters(computed_covariance, len_train_clusters, log_det_values, opt_res,
-                                   train_cluster_inverse)
+            computed_covariance, train_cluster_inverse = self.optimize_clusters(len_train_clusters, opt_res)
 
             # update old computed covariance
             old_computed_covariance = computed_covariance
 
-            print("UPDATED THE OLD COVARIANCE")
+            # SMOOTHENING
+            lle_all_points_clusters = self.smoothen_clusters(computed_covariance, cluster_mean_stacked_info,
+                                                             self.complete_d_train, time_series_col_size)
+            # Update cluster points - using NEW smoothening
+            clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty)
 
+            # safe training result
             self.trained_model = {'computed_covariance': computed_covariance,
                                   'cluster_mean_stacked_info': cluster_mean_stacked_info,
                                   'time_series_col_size': time_series_col_size}
-            clustered_points = self.predict_clusters(self.complete_D_train)
 
             # recalculate lengths
             new_train_clusters = self.transform_into_dictionary_of_clusters_and_indices_of_points(clustered_points)
@@ -162,7 +160,7 @@ class TICC:
                             clustered_points[point_to_move] = cluster_num
                             computed_covariance[self.number_of_clusters, cluster_num] = old_computed_covariance[
                                 self.number_of_clusters, cluster_selected]
-                            cluster_mean_stacked_info[self.number_of_clusters, cluster_num] = self.complete_D_train[
+                            cluster_mean_stacked_info[self.number_of_clusters, cluster_num] = self.complete_d_train[
                                                                                               point_to_move, :]
 
             for cluster_num in range(self.number_of_clusters):
@@ -208,6 +206,8 @@ class TICC:
         #     bic = computeBIC(self.number_of_clusters, time_series_rows_size, clustered_points, train_cluster_inverse,
         #                      empirical_covariances)
         #     return clustered_points, train_cluster_inverse, bic
+
+        # train cluster inverse is np.linalg.inv(computed_covariance), it's not used in training!!!
 
         return clustered_points, train_cluster_inverse
 
@@ -300,24 +300,29 @@ class TICC:
 
         return LLE_all_points_clusters
 
-    def optimize_clusters(self, computed_covariance, len_train_clusters, log_det_values, optRes, train_cluster_inverse):
+    def optimize_clusters(self, len_train_clusters, opt_res):
+        # initialise
+        # dictionary with key=cluster index and value 2d ndarray of Toeplitz Matrices for each cluster
+        train_cluster_inverse = {}
+        # dictionary with key=(k,cluster index) and value covariance matrix, if you calculate np.linalg.inv(computed_covariance) you get train_cluster_inverse, this is sparse
+        computed_covariance = {}
+
         for cluster in range(self.number_of_clusters):
-            if optRes[cluster] is None:
+            if opt_res[cluster] is None:
                 continue
-            val = optRes[cluster]
+            opt_res_for_cluster = opt_res[cluster]
             print("OPTIMIZATION for Cluster #", cluster, "DONE!!!")
             # THIS IS THE SOLUTION
-            S_est = upperToFull(val, 0)
+            S_est = upperToFull(opt_res_for_cluster, 0)
             X2 = S_est
             u, _ = np.linalg.eig(S_est)
             cov_out = np.linalg.inv(X2)
 
-            # Store the log-det, covariance, inverse-covariance, cluster means, stacked means
-            log_det_values[self.number_of_clusters, cluster] = np.log(np.linalg.det(cov_out))
             computed_covariance[self.number_of_clusters, cluster] = cov_out
             train_cluster_inverse[cluster] = X2
         for cluster in range(self.number_of_clusters):
             print("length of the cluster ", cluster, "------>", len_train_clusters[cluster])
+        return computed_covariance, train_cluster_inverse
 
     def train_clusters(self, complete_D_train, len_train_clusters, n, train_clusters_arr):
         # initialise
@@ -380,9 +385,8 @@ class TICC:
         print("num stacked", self.window_size)
 
     def predict_clusters(self, test_data):
-        '''
-        Given the current trained model, predict clusters.  If the cluster segmentation has not been optimized yet,
-        then this will be part of the iterative process.
+        """
+        Given the current trained model, predict clusters.
 
         Args:
             numpy array of data for which to predict clusters.  Columns are dimensions of the data, each row is
@@ -390,7 +394,7 @@ class TICC:
 
         Returns:
             vector of predicted cluster for the points
-        '''
+        """
         if not isinstance(test_data, np.ndarray):
             raise TypeError(
                 "test data must be a numpy array with rows observation at time i and columns different variates!")

@@ -16,7 +16,7 @@ class TestStringMethods(unittest.TestCase):
 
         # Test prediction works with batch of data outside of `fit` method. Perhaps there is a better way
         # to test this in parallel so these are more like unit tests rather than integration tests?
-        test_batch = ticc.predict_clusters(ticc.complete_D_train[0:1000, ])
+        test_batch = ticc.predict_clusters(ticc.complete_d_train[0:1000, ])
         batch_val = abs(test_batch - cluster_assignment[0:1000])
         self.assertEqual(sum(batch_val), 0)
 
@@ -29,7 +29,7 @@ class TestStringMethods(unittest.TestCase):
             test_stream = np.zeros(1000)
             test_stream[0:block_size] = cluster_assignment[0:block_size]
             for i in range(block_size, 1000):
-                point = ticc.complete_D_train[i - block_size:i, ]
+                point = ticc.complete_d_train[i - block_size:i, ]
                 test_stream[i] = ticc.predict_clusters(point)[block_size - 1]
 
             percent_correct_streaming = 100 * sum(cluster_assignment[0:1000] == test_stream) / 1000.0
