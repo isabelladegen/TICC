@@ -1,6 +1,7 @@
 import numpy as np
 import math, time, collections, os, errno, sys, code, random
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn import mixture
@@ -10,7 +11,6 @@ from multiprocessing import Pool
 
 from src.TICC_helper import *
 from src.admm_solver import ADMMSolver
-
 
 
 class TICC:
@@ -77,11 +77,11 @@ class TICC:
         gmm = mixture.GaussianMixture(n_components=self.number_of_clusters, covariance_type="full")
         gmm.fit(complete_D_train)
         clustered_points = gmm.predict(complete_D_train)
-        gmm_clustered_pts = clustered_points + 0
-        # K-means
-        kmeans = KMeans(n_clusters=self.number_of_clusters, random_state=0).fit(complete_D_train)
-        clustered_points_kmeans = kmeans.labels_  # todo, is there a difference between these two?
-        kmeans_clustered_pts = kmeans.labels_
+        # # gmm_clustered_pts = clustered_points + 0
+        # # K-means
+        # kmeans = KMeans(n_clusters=self.number_of_clusters, random_state=0).fit(complete_D_train)
+        # clustered_points_kmeans = kmeans.labels_  # todo, is there a difference between these two?
+        # kmeans_clustered_pts = kmeans.labels_
 
         train_cluster_inverse = {}
         log_det_values = {}  # log dets of the thetas
@@ -93,7 +93,7 @@ class TICC:
         empirical_covariances = {}
 
         # PERFORM TRAINING ITERATIONS
-        pool = Pool(processes=self.num_proc)  # multi-threading
+        # pool = Pool(processes=self.num_proc)  # multi-threading
         for iters in range(self.maxIters):
             print("\n\n\nITERATION ###", iters)
             # Get the train and test points
@@ -106,7 +106,7 @@ class TICC:
             # train_clusters holds the indices in complete_D_train
             # for each of the clusters
             opt_res = self.train_clusters(cluster_mean_info, cluster_mean_stacked_info, complete_D_train,
-                                          empirical_covariances, len_train_clusters, time_series_col_size, pool,
+                                          empirical_covariances, len_train_clusters, time_series_col_size,
                                           train_clusters_arr)
 
             self.optimize_clusters(computed_covariance, len_train_clusters, log_det_values, opt_res,
@@ -118,22 +118,20 @@ class TICC:
             print("UPDATED THE OLD COVARIANCE")
 
             self.trained_model = {'cluster_mean_info': cluster_mean_info,
-                                 'computed_covariance': computed_covariance,
-                                 'cluster_mean_stacked_info': cluster_mean_stacked_info,
-                                 'complete_D_train': complete_D_train,
-                                 'time_series_col_size': time_series_col_size}
+                                  'computed_covariance': computed_covariance,
+                                  'cluster_mean_stacked_info': cluster_mean_stacked_info,
+                                  'complete_D_train': complete_D_train,
+                                  'time_series_col_size': time_series_col_size}
             clustered_points = self.predict_clusters()
 
             # recalculate lengths
-            new_train_clusters = collections.defaultdict(list) # {cluster: [point indices]}
+            new_train_clusters = collections.defaultdict(list)  # {cluster: [point indices]}
             for point, cluster in enumerate(clustered_points):
                 new_train_clusters[cluster].append(point)
 
             len_new_train_clusters = {k: len(new_train_clusters[k]) for k in range(self.number_of_clusters)}
 
             before_empty_cluster_assign = clustered_points.copy()
-
-
 
             if iters != 0:
                 cluster_norms = [(np.linalg.norm(old_computed_covariance[self.number_of_clusters, i]), i) for i in
@@ -167,7 +165,8 @@ class TICC:
                                   (self.window_size - 1) * time_series_col_size:self.window_size * time_series_col_size]
 
             for cluster_num in range(self.number_of_clusters):
-                print("length of cluster #", cluster_num, "-------->", sum([x == cluster_num for x in clustered_points]))
+                print("length of cluster #", cluster_num, "-------->",
+                      sum([x == cluster_num for x in clustered_points]))
 
             self.write_plot(clustered_points, str_NULL, training_indices)
 
@@ -176,41 +175,41 @@ class TICC:
             # Segment length
             # Create the F1 score from the graphs from k-means and GMM
             # Get the train and test points
-            train_confusion_matrix_EM = compute_confusion_matrix(self.number_of_clusters, clustered_points,
-                                                                 training_indices)
-            train_confusion_matrix_GMM = compute_confusion_matrix(self.number_of_clusters, gmm_clustered_pts,
-                                                                  training_indices)
-            train_confusion_matrix_kmeans = compute_confusion_matrix(self.number_of_clusters, kmeans_clustered_pts,
-                                                                     training_indices)
+            # train_confusion_matrix_EM = compute_confusion_matrix(self.number_of_clusters, clustered_points,
+            #                                                      training_indices)
+            # train_confusion_matrix_GMM = compute_confusion_matrix(self.number_of_clusters, gmm_clustered_pts,
+            #                                                       training_indices)
+            # train_confusion_matrix_kmeans = compute_confusion_matrix(self.number_of_clusters, kmeans_clustered_pts,
+            #                                                          training_indices)
             ###compute the matchings
-            matching_EM, matching_GMM, matching_Kmeans = self.compute_matches(train_confusion_matrix_EM,
-                                                                              train_confusion_matrix_GMM,
-                                                                              train_confusion_matrix_kmeans)
+            # matching_EM, matching_GMM, matching_Kmeans = self.compute_matches(train_confusion_matrix_EM,
+            #                                                                   train_confusion_matrix_GMM,
+            #                                                                   train_confusion_matrix_kmeans)
 
             print("\n\n\n")
 
-            if np.array_equal(old_clustered_points, clustered_points):
+            if np.array_equal(old_clustered_points, clustered_points):  # stop if nothing changes
                 print("\n\n\n\nCONVERGED!!! BREAKING EARLY!!!")
                 break
             old_clustered_points = before_empty_cluster_assign
             # end of training
-        if pool is not None:
-            pool.close()
-            pool.join()
-        train_confusion_matrix_EM = compute_confusion_matrix(self.number_of_clusters, clustered_points,
-                                                             training_indices)
-        train_confusion_matrix_GMM = compute_confusion_matrix(self.number_of_clusters, gmm_clustered_pts,
-                                                              training_indices)
-        train_confusion_matrix_kmeans = compute_confusion_matrix(self.number_of_clusters, clustered_points_kmeans,
-                                                                 training_indices)
+        # if pool is not None:
+        #     pool.close()
+        #     pool.join()
+        # train_confusion_matrix_EM = compute_confusion_matrix(self.number_of_clusters, clustered_points,
+        #                                                      training_indices)
+        # train_confusion_matrix_GMM = compute_confusion_matrix(self.number_of_clusters, gmm_clustered_pts,
+        #                                                       training_indices)
+        # train_confusion_matrix_kmeans = compute_confusion_matrix(self.number_of_clusters, clustered_points_kmeans,
+        #                                                          training_indices)
+        #
+        # self.compute_f_score(matching_EM, matching_GMM, matching_Kmeans, train_confusion_matrix_EM,
+        #                      train_confusion_matrix_GMM, train_confusion_matrix_kmeans)
 
-        self.compute_f_score(matching_EM, matching_GMM, matching_Kmeans, train_confusion_matrix_EM,
-                             train_confusion_matrix_GMM, train_confusion_matrix_kmeans)
-
-        if self.compute_BIC:
-            bic = computeBIC(self.number_of_clusters, time_series_rows_size, clustered_points, train_cluster_inverse,
-                             empirical_covariances)
-            return clustered_points, train_cluster_inverse, bic
+        # if self.compute_BIC:
+        #     bic = computeBIC(self.number_of_clusters, time_series_rows_size, clustered_points, train_cluster_inverse,
+        #                      empirical_covariances)
+        #     return clustered_points, train_cluster_inverse, bic
 
         return clustered_points, train_cluster_inverse
 
@@ -234,27 +233,29 @@ class TICC:
             correct_k_means += train_confusion_matrix_kmeans[cluster, matched_cluster__k_means]
 
     def compute_matches(self, train_confusion_matrix_EM, train_confusion_matrix_GMM, train_confusion_matrix_kmeans):
-        matching_Kmeans = find_matching(train_confusion_matrix_kmeans)
-        matching_GMM = find_matching(train_confusion_matrix_GMM)
-        matching_EM = find_matching(train_confusion_matrix_EM)
-        correct_e_m = 0
-        correct_g_m_m = 0
-        correct_k_means = 0
-        for cluster in range(self.number_of_clusters):
-            matched_cluster_e_m = matching_EM[cluster]
-            matched_cluster_g_m_m = matching_GMM[cluster]
-            matched_cluster_k_means = matching_Kmeans[cluster]
-
-            correct_e_m += train_confusion_matrix_EM[cluster, matched_cluster_e_m]
-            correct_g_m_m += train_confusion_matrix_GMM[cluster, matched_cluster_g_m_m]
-            correct_k_means += train_confusion_matrix_kmeans[cluster, matched_cluster_k_means]
-        return matching_EM, matching_GMM, matching_Kmeans
+        print("Not implemented")
+        # # matching_Kmeans = find_matching(train_confusion_matrix_kmeans)
+        # # matching_GMM = find_matching(train_confusion_matrix_GMM)
+        # matching_EM = find_matching(train_confusion_matrix_EM)
+        # correct_e_m = 0
+        # correct_g_m_m = 0
+        # correct_k_means = 0
+        # for cluster in range(self.number_of_clusters):
+        #     matched_cluster_e_m = matching_EM[cluster]
+        #     matched_cluster_g_m_m = matching_GMM[cluster]
+        #     matched_cluster_k_means = matching_Kmeans[cluster]
+        #
+        #     correct_e_m += train_confusion_matrix_EM[cluster, matched_cluster_e_m]
+        #     correct_g_m_m += train_confusion_matrix_GMM[cluster, matched_cluster_g_m_m]
+        #     correct_k_means += train_confusion_matrix_kmeans[cluster, matched_cluster_k_means]
+        # return matching_EM, matching_GMM, matching_Kmeans
 
     def write_plot(self, clustered_points, str_NULL, training_indices):
         # Save a figure of segmentation
         plt.figure()
         plt.plot(training_indices[0:len(clustered_points)], clustered_points, color="r")  # ,marker = ".",s =100)
         plt.ylim((-0.5, self.number_of_clusters + 0.5))
+        plt.show()
         if self.write_out_file: plt.savefig(
             str_NULL + "TRAINING_EM_lam_sparse=" + str(self.lambda_parameter) + "switch_penalty = " + str(
                 self.switch_penalty) + ".jpg")
@@ -292,9 +293,9 @@ class TICC:
 
     def optimize_clusters(self, computed_covariance, len_train_clusters, log_det_values, optRes, train_cluster_inverse):
         for cluster in range(self.number_of_clusters):
-            if optRes[cluster] == None:
+            if optRes[cluster].any() is None:
                 continue
-            val = optRes[cluster].get()
+            val = optRes[cluster]
             print("OPTIMIZATION for Cluster #", cluster, "DONE!!!")
             # THIS IS THE SOLUTION
             S_est = upperToFull(val, 0)
@@ -310,7 +311,7 @@ class TICC:
             print("length of the cluster ", cluster, "------>", len_train_clusters[cluster])
 
     def train_clusters(self, cluster_mean_info, cluster_mean_stacked_info, complete_D_train, empirical_covariances,
-                       len_train_clusters, n, pool, train_clusters_arr):
+                       len_train_clusters, n, train_clusters_arr):
         optRes = [None for i in range(self.number_of_clusters)]
         for cluster in range(self.number_of_clusters):
             cluster_length = len_train_clusters[cluster]
@@ -324,7 +325,7 @@ class TICC:
 
                 cluster_mean_info[self.number_of_clusters, cluster] = np.mean(D_train, axis=0)[
                                                                       (
-                                                                          self.window_size - 1) * n:self.window_size * n].reshape(
+                                                                              self.window_size - 1) * n:self.window_size * n].reshape(
                     [1, n])
                 cluster_mean_stacked_info[self.number_of_clusters, cluster] = np.mean(D_train, axis=0)
                 ##Fit a model - OPTIMIZATION
@@ -336,7 +337,8 @@ class TICC:
                 rho = 1
                 solver = ADMMSolver(lamb, self.window_size, size_blocks, 1, S)
                 # apply to process pool
-                optRes[cluster] = pool.apply_async(solver, (1000, 1e-6, 1e-6, False,))
+                optRes[cluster] = solver(1000, 1e-6, 1e-6, True)
+                # optRes[cluster] = pool.apply_async(solver, (1000, 1e-6, 1e-6, False,))
         return optRes
 
     def stack_training_data(self, Data, n, num_train_points, training_indices):
@@ -372,7 +374,7 @@ class TICC:
         print("num_cluster", self.number_of_clusters)
         print("num stacked", self.window_size)
 
-    def predict_clusters(self, test_data = None):
+    def predict_clusters(self, test_data=None):
         '''
         Given the current trained model, predict clusters.  If the cluster segmentation has not been optimized yet,
         than this will be part of the interative process.
@@ -400,4 +402,4 @@ class TICC:
         # Update cluster points - using NEW smoothening
         clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty)
 
-        return(clustered_points)
+        return (clustered_points)
