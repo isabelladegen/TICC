@@ -43,8 +43,8 @@ class TICC:
         self.cluster_reassignment = cluster_reassignment
         self.num_blocks = self.window_size + 1
         self.biased = biased
-        # left over of weird design where the fit reads the data and sets variables that then are used globally
-        self.complete_D_train = None
+        # training data (left over design): 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
+        self.complete_D_train = None  # gets assigned in fit
         pd.set_option('display.max_columns', 500)
         np.set_printoptions(formatter={'float': lambda x: "{0:0.4f}".format(x)})
         np.random.seed(102)
@@ -111,10 +111,10 @@ class TICC:
             # train_clusters holds the indices in complete_D_train
             # for each of the clusters
             # opt_res is list of k (8) ndarrays of length 465
-            opt_res, cluster_mean_info, cluster_mean_stacked_info = self.train_clusters(self.complete_D_train,
-                                                                                        len_train_clusters,
-                                                                                        time_series_col_size,
-                                                                                        train_clusters_arr)
+            opt_res, cluster_mean_stacked_info = self.train_clusters(self.complete_D_train,
+                                                                     len_train_clusters,
+                                                                     time_series_col_size,
+                                                                     train_clusters_arr)
 
             self.optimize_clusters(computed_covariance, len_train_clusters, log_det_values, opt_res,
                                    train_cluster_inverse)
@@ -124,11 +124,10 @@ class TICC:
 
             print("UPDATED THE OLD COVARIANCE")
 
-            self.trained_model = {'cluster_mean_info': cluster_mean_info,
-                                  'computed_covariance': computed_covariance,
+            self.trained_model = {'computed_covariance': computed_covariance,
                                   'cluster_mean_stacked_info': cluster_mean_stacked_info,
                                   'time_series_col_size': time_series_col_size}
-            clustered_points = self.predict_clusters()
+            clustered_points = self.predict_clusters(self.complete_D_train)
 
             # recalculate lengths
             new_train_clusters = self.transform_into_dictionary_of_clusters_and_indices_of_points(clustered_points)
@@ -165,9 +164,6 @@ class TICC:
                                 self.number_of_clusters, cluster_selected]
                             cluster_mean_stacked_info[self.number_of_clusters, cluster_num] = self.complete_D_train[
                                                                                               point_to_move, :]
-                            cluster_mean_info[self.number_of_clusters, cluster_num] \
-                                = self.complete_D_train[point_to_move, :][
-                                  (self.window_size - 1) * time_series_col_size:self.window_size * time_series_col_size]
 
             for cluster_num in range(self.number_of_clusters):
                 print("length of cluster #", cluster_num, "-------->",
@@ -276,8 +272,7 @@ class TICC:
         plt.close("all")
         print("Done writing the figure")
 
-    def smoothen_clusters(self, cluster_mean_info, computed_covariance,
-                          cluster_mean_stacked_info, complete_D_train, n):
+    def smoothen_clusters(self, computed_covariance, cluster_mean_stacked_info, complete_D_train, n):
         clustered_points_len = len(complete_D_train)
         inv_cov_dict = {}  # cluster to inv_cov
         log_det_dict = {}  # cluster to log_det
@@ -295,7 +290,6 @@ class TICC:
         for point in range(clustered_points_len):
             if point + self.window_size - 1 < complete_D_train.shape[0]:
                 for cluster in cluster_num_currently_used:
-                    cluster_mean = cluster_mean_info[self.number_of_clusters, cluster]
                     cluster_mean_stacked = cluster_mean_stacked_info[self.number_of_clusters, cluster]
                     x = complete_D_train[point, :] - cluster_mean_stacked[0:(self.num_blocks - 1) * n]
                     inv_cov_matrix = inv_cov_dict[cluster]
@@ -328,8 +322,6 @@ class TICC:
     def train_clusters(self, complete_D_train, len_train_clusters, n, train_clusters_arr):
         # initialise
         optRes = [None for i in range(self.number_of_clusters)]
-        # dictionary with key=(k,cluster index) and value a list of length n (number of time series) with a mean value for each variant, persumably the mean value of all observation in that cluster in that time series
-        cluster_mean_info = {}
         # dictionary with key=(k,cluster index) and value a list of length w*n not sure what the values mean
         cluster_mean_stacked_info = {}
 
@@ -343,10 +335,6 @@ class TICC:
                     point = indices[i]
                     D_train[i, :] = complete_D_train[point, :]
 
-                cluster_mean_info[self.number_of_clusters, cluster] = np.mean(D_train, axis=0)[
-                                                                      (
-                                                                              self.window_size - 1) * n:self.window_size * n].reshape(
-                    [1, n])
                 cluster_mean_stacked_info[self.number_of_clusters, cluster] = np.mean(D_train, axis=0)
                 # Fit a model - OPTIMIZATION
                 probSize = self.window_size * size_blocks
@@ -356,7 +344,7 @@ class TICC:
                 rho = 1
                 solver = ADMMSolver(lamb, self.window_size, size_blocks, 1, S)
                 optRes[cluster] = solver(1000, 1e-6, 1e-6, True)
-        return optRes, cluster_mean_info, cluster_mean_stacked_info
+        return optRes, cluster_mean_stacked_info
 
     def stack_training_data(self, Data, n, num_train_points, training_indices):
         complete_D_train = np.zeros([num_train_points, self.window_size * n])
@@ -391,10 +379,10 @@ class TICC:
         print("num_cluster", self.number_of_clusters)
         print("num stacked", self.window_size)
 
-    def predict_clusters(self, test_data=None):
+    def predict_clusters(self, test_data):
         '''
         Given the current trained model, predict clusters.  If the cluster segmentation has not been optimized yet,
-        than this will be part of the interative process.
+        then this will be part of the iterative process.
 
         Args:
             numpy array of data for which to predict clusters.  Columns are dimensions of the data, each row is
@@ -403,18 +391,13 @@ class TICC:
         Returns:
             vector of predicted cluster for the points
         '''
-        if test_data is not None:
-            if not isinstance(test_data, np.ndarray):
-                raise TypeError("input must be a numpy array!")
-        else:
-            # 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
-            test_data = self.complete_D_train
+        if not isinstance(test_data, np.ndarray):
+            raise TypeError(
+                "test data must be a numpy array with rows observation at time i and columns different variates!")
 
         # SMOOTHENING
-        lle_all_points_clusters = self.smoothen_clusters(self.trained_model['cluster_mean_info'],
-                                                         self.trained_model['computed_covariance'],
-                                                         self.trained_model['cluster_mean_stacked_info'],
-                                                         test_data,
+        lle_all_points_clusters = self.smoothen_clusters(self.trained_model['computed_covariance'],
+                                                         self.trained_model['cluster_mean_stacked_info'], test_data,
                                                          self.trained_model['time_series_col_size'])
 
         # Update cluster points - using NEW smoothening

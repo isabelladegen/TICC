@@ -1,7 +1,6 @@
 import unittest
 from TICC_solver import TICC
 import numpy as np
-import sys
 
 
 class TestStringMethods(unittest.TestCase):
