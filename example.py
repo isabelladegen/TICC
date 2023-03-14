@@ -10,14 +10,12 @@ ticc = TICC(window_size=window_size, number_of_clusters=number_of_clusters, lamb
             write_out_file=False, prefix_string="output_folder/", num_proc=1)
 (cluster_assignment, cluster_MRFs) = ticc.fit(input_file=fname)
 
-# MY EDITS TO THE OUTPUT
+# MY EDITS TO BETTER UNDERSTAND THE RESULTS
 list_of_lists = []
 current_cluster = int(cluster_assignment[0])
 new_list = []
 # some more useful output than cluster assignment
 for i in range(len(cluster_assignment)):
-    if i == 11540:
-        print(i)
     current_observations_cluster = int(cluster_assignment[i])
     if current_observations_cluster != current_cluster:  # create new list
         current_cluster = current_observations_cluster
@@ -32,26 +30,30 @@ for clusterx_list in list_of_lists:
     cluster_index = clusterx_list[0]
     repetition_of_cluster[int(cluster_index)] += 1
     print("Segment for cluster: " + str(cluster_index) + ", with number of observations: " + str(len(clusterx_list)))
-print("Number of times cluster appears:")
+print("\n")
+print("Number of times cluster repeats (list is in order of cluster):")
 print(repetition_of_cluster)
 
 # shape is a dictionary with a key for each of the 8 clusters with each an array of w*n x w*n where w=window size, n = no variants
 cluster_one_mfr = cluster_MRFs[1]
-print("Shape cluster 1:")
+print("\n")
+print("Shape of MFRs:")
 print(cluster_one_mfr.shape)
 no_time_series = 10
 
 
 def assert_two_matrices_are_the_same(m1, m2, msg):
-    if (np.around(m1, decimals=4) != np.around(m2, decimals=4)).all():
+    # without rounding they are not equal which might just be due to np's equality
+    if (np.around(m1, decimals=8) != np.around(m2, decimals=4)).all():
         print(msg + " are not equal")
 
 
+print("\n")
+print("List all the block matrices of each cluster's MFR that are not equal")
 # check which clusters have proper Toeplitz Matrices
 for cluster_id, mfr in cluster_MRFs.items():
     # check diagonal
-    print("\n")
-    print("Check cluster: " + str(cluster_id))
+    print("Cluster " + str(cluster_id) + ":")
     first_a0 = mfr[0:no_time_series, 0:no_time_series]
     second_a0 = mfr[no_time_series:2 * no_time_series, no_time_series:2 * no_time_series]
     third_a0 = mfr[2 * no_time_series:, 2 * no_time_series:]
@@ -71,6 +73,5 @@ for cluster_id, mfr in cluster_MRFs.items():
     a2 = mfr[2 * no_time_series:, 0:no_time_series]
     a2t = mfr[0:no_time_series, 2 * no_time_series:]
     assert_two_matrices_are_the_same(a2.T, a2t, "a2 transposed and a2t")
-
 
 np.savetxt('Results.txt', cluster_assignment, fmt='%d', delimiter=',')

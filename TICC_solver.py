@@ -1,16 +1,16 @@
-import numpy as np
-import math, time, collections, os, errno, sys, code, random
+import errno
+import os
+
 import matplotlib
 
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn import mixture
-from sklearn.cluster import KMeans
 import pandas as pd
-from multiprocessing import Pool
 
 from src.TICC_helper import *
 from src.admm_solver import ADMMSolver
+
+matplotlib.use('Agg')
 
 
 class TICC:
@@ -43,6 +43,8 @@ class TICC:
         self.cluster_reassignment = cluster_reassignment
         self.num_blocks = self.window_size + 1
         self.biased = biased
+        # left over of weird design where the fit reads the data and sets variables that then are used globally
+        self.complete_D_train = None
         pd.set_option('display.max_columns', 500)
         np.set_printoptions(formatter={'float': lambda x: "{0:0.4f}".format(x)})
         np.random.seed(102)
@@ -57,6 +59,8 @@ class TICC:
         self.log_parameters()
 
         # Get data into proper format
+        # in the example times_series_arr = (19607,10)
+        # rows and cols not defined
         times_series_arr, time_series_rows_size, time_series_col_size = self.load_data(input_file)
 
         ############
@@ -64,50 +68,53 @@ class TICC:
         str_NULL = self.prepare_out_directory()
 
         # Train test split
+        # list of length 19605
         training_indices = getTrainTestSplit(time_series_rows_size, self.num_blocks,
                                              self.window_size)  # indices of the training samples
+        # 19605
         num_train_points = len(training_indices)
 
         # Stack the training data
-        complete_D_train = self.stack_training_data(times_series_arr, time_series_col_size, num_train_points,
-                                                    training_indices)
+        # 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
+        self.complete_D_train = self.stack_training_data(times_series_arr, time_series_col_size, num_train_points,
+                                                         training_indices)
 
         # Initialization
         # Gaussian Mixture
         gmm = mixture.GaussianMixture(n_components=self.number_of_clusters, covariance_type="full")
-        gmm.fit(complete_D_train)
-        clustered_points = gmm.predict(complete_D_train)
-        # # gmm_clustered_pts = clustered_points + 0
-        # # K-means
-        # kmeans = KMeans(n_clusters=self.number_of_clusters, random_state=0).fit(complete_D_train)
-        # clustered_points_kmeans = kmeans.labels_  # todo, is there a difference between these two?
-        # kmeans_clustered_pts = kmeans.labels_
+        gmm.fit(self.complete_D_train)
+        clustered_points = gmm.predict(self.complete_D_train)  # -> this is the original starting point
 
+        # ndarray of length observations and values index of cluster the observation belongs to, example (19605)
+        # clustered_points = np.random.randint(self.number_of_clusters, size=num_train_points)
+        # clustered_points = np.zeros(num_train_points)
+        # clustered_points = np.ones(num_train_points)
+        # dictionary with key=cluster index and value 2d ndarray of Toeplitz Matrices for each cluster
         train_cluster_inverse = {}
+        # dictionary with key=(k,cluster index) e.g (8,0), (8,1)... and value a decimal
         log_det_values = {}  # log dets of the thetas
+        # dictionary with key=(k,cluster index) and value covariance matrix, if you calculate np.linalg.inv(computed_covariance) you get train_cluster_inverse, this is sparse
         computed_covariance = {}
-        cluster_mean_info = {}
-        cluster_mean_stacked_info = {}
+
         old_clustered_points = None  # points from last iteration
 
-        empirical_covariances = {}
-
         # PERFORM TRAINING ITERATIONS
-        # pool = Pool(processes=self.num_proc)  # multi-threading
         for iters in range(self.maxIters):
             print("\n\n\nITERATION ###", iters)
             # Get the train and test points
-            train_clusters_arr = collections.defaultdict(list)  # {cluster: [point indices]}
-            for point, cluster_num in enumerate(clustered_points):
-                train_clusters_arr[cluster_num].append(point)
+            # {cluster_num: [indices of observation in that cluster]}
+            train_clusters_arr = self.transform_into_dictionary_of_clusters_and_indices_of_points(clustered_points)
 
+            # dictionary of key=cluster index and value=total number of observations in that cluster
             len_train_clusters = {k: len(train_clusters_arr[k]) for k in range(self.number_of_clusters)}
 
             # train_clusters holds the indices in complete_D_train
             # for each of the clusters
-            opt_res = self.train_clusters(cluster_mean_info, cluster_mean_stacked_info, complete_D_train,
-                                          empirical_covariances, len_train_clusters, time_series_col_size,
-                                          train_clusters_arr)
+            # opt_res is list of k (8) ndarrays of length 465
+            opt_res, cluster_mean_info, cluster_mean_stacked_info = self.train_clusters(self.complete_D_train,
+                                                                                        len_train_clusters,
+                                                                                        time_series_col_size,
+                                                                                        train_clusters_arr)
 
             self.optimize_clusters(computed_covariance, len_train_clusters, log_det_values, opt_res,
                                    train_cluster_inverse)
@@ -120,22 +127,20 @@ class TICC:
             self.trained_model = {'cluster_mean_info': cluster_mean_info,
                                   'computed_covariance': computed_covariance,
                                   'cluster_mean_stacked_info': cluster_mean_stacked_info,
-                                  'complete_D_train': complete_D_train,
                                   'time_series_col_size': time_series_col_size}
             clustered_points = self.predict_clusters()
 
             # recalculate lengths
-            new_train_clusters = collections.defaultdict(list)  # {cluster: [point indices]}
-            for point, cluster in enumerate(clustered_points):
-                new_train_clusters[cluster].append(point)
+            new_train_clusters = self.transform_into_dictionary_of_clusters_and_indices_of_points(clustered_points)
 
             len_new_train_clusters = {k: len(new_train_clusters[k]) for k in range(self.number_of_clusters)}
 
             before_empty_cluster_assign = clustered_points.copy()
 
             if iters != 0:
+                old_cluster_num__used = [x[1] for x in list(old_computed_covariance.keys())]
                 cluster_norms = [(np.linalg.norm(old_computed_covariance[self.number_of_clusters, i]), i) for i in
-                                 range(self.number_of_clusters)]
+                                 old_cluster_num__used]
                 norms_sorted = sorted(cluster_norms, reverse=True)
                 # clusters that are not 0 as sorted by norm
                 valid_clusters = [cp[1] for cp in norms_sorted if len_new_train_clusters[cp[1]] != 0]
@@ -158,10 +163,10 @@ class TICC:
                             clustered_points[point_to_move] = cluster_num
                             computed_covariance[self.number_of_clusters, cluster_num] = old_computed_covariance[
                                 self.number_of_clusters, cluster_selected]
-                            cluster_mean_stacked_info[self.number_of_clusters, cluster_num] = complete_D_train[
+                            cluster_mean_stacked_info[self.number_of_clusters, cluster_num] = self.complete_D_train[
                                                                                               point_to_move, :]
                             cluster_mean_info[self.number_of_clusters, cluster_num] \
-                                = complete_D_train[point_to_move, :][
+                                = self.complete_D_train[point_to_move, :][
                                   (self.window_size - 1) * time_series_col_size:self.window_size * time_series_col_size]
 
             for cluster_num in range(self.number_of_clusters):
@@ -193,9 +198,6 @@ class TICC:
                 break
             old_clustered_points = before_empty_cluster_assign
             # end of training
-        # if pool is not None:
-        #     pool.close()
-        #     pool.join()
         # train_confusion_matrix_EM = compute_confusion_matrix(self.number_of_clusters, clustered_points,
         #                                                      training_indices)
         # train_confusion_matrix_GMM = compute_confusion_matrix(self.number_of_clusters, gmm_clustered_pts,
@@ -212,6 +214,18 @@ class TICC:
         #     return clustered_points, train_cluster_inverse, bic
 
         return clustered_points, train_cluster_inverse
+
+    def transform_into_dictionary_of_clusters_and_indices_of_points(self, clustered_points):
+        """
+        Transforms ndarray of clustered points into dictionary of clusters and lists of incices for points in that cluster
+        :param clustered_points: ndarray of length TS length
+        :return: {cluster_id:[indices of points in cluster]}
+
+        """
+        train_clusters_arr = {k: [] for k in range(self.number_of_clusters)}  # {cluster: [point indices]}
+        for point_idx, cluster_num in enumerate(clustered_points):
+            train_clusters_arr[cluster_num].append(point_idx)
+        return train_clusters_arr
 
     def compute_f_score(self, matching_EM, matching_GMM, matching_Kmeans, train_confusion_matrix_EM,
                         train_confusion_matrix_GMM, train_confusion_matrix_kmeans):
@@ -267,7 +281,8 @@ class TICC:
         clustered_points_len = len(complete_D_train)
         inv_cov_dict = {}  # cluster to inv_cov
         log_det_dict = {}  # cluster to log_det
-        for cluster in range(self.number_of_clusters):
+        cluster_num_currently_used = [x[1] for x in list(computed_covariance.keys())]
+        for cluster in cluster_num_currently_used:
             cov_matrix = computed_covariance[self.number_of_clusters, cluster][0:(self.num_blocks - 1) * n,
                          0:(self.num_blocks - 1) * n]
             inv_cov_matrix = np.linalg.inv(cov_matrix)
@@ -279,7 +294,7 @@ class TICC:
         LLE_all_points_clusters = np.zeros([clustered_points_len, self.number_of_clusters])
         for point in range(clustered_points_len):
             if point + self.window_size - 1 < complete_D_train.shape[0]:
-                for cluster in range(self.number_of_clusters):
+                for cluster in cluster_num_currently_used:
                     cluster_mean = cluster_mean_info[self.number_of_clusters, cluster]
                     cluster_mean_stacked = cluster_mean_stacked_info[self.number_of_clusters, cluster]
                     x = complete_D_train[point, :] - cluster_mean_stacked[0:(self.num_blocks - 1) * n]
@@ -293,7 +308,7 @@ class TICC:
 
     def optimize_clusters(self, computed_covariance, len_train_clusters, log_det_values, optRes, train_cluster_inverse):
         for cluster in range(self.number_of_clusters):
-            if optRes[cluster].any() is None:
+            if optRes[cluster] is None:
                 continue
             val = optRes[cluster]
             print("OPTIMIZATION for Cluster #", cluster, "DONE!!!")
@@ -310,9 +325,14 @@ class TICC:
         for cluster in range(self.number_of_clusters):
             print("length of the cluster ", cluster, "------>", len_train_clusters[cluster])
 
-    def train_clusters(self, cluster_mean_info, cluster_mean_stacked_info, complete_D_train, empirical_covariances,
-                       len_train_clusters, n, train_clusters_arr):
+    def train_clusters(self, complete_D_train, len_train_clusters, n, train_clusters_arr):
+        # initialise
         optRes = [None for i in range(self.number_of_clusters)]
+        # dictionary with key=(k,cluster index) and value a list of length n (number of time series) with a mean value for each variant, persumably the mean value of all observation in that cluster in that time series
+        cluster_mean_info = {}
+        # dictionary with key=(k,cluster index) and value a list of length w*n not sure what the values mean
+        cluster_mean_stacked_info = {}
+
         for cluster in range(self.number_of_clusters):
             cluster_length = len_train_clusters[cluster]
             if cluster_length != 0:
@@ -328,18 +348,15 @@ class TICC:
                                                                               self.window_size - 1) * n:self.window_size * n].reshape(
                     [1, n])
                 cluster_mean_stacked_info[self.number_of_clusters, cluster] = np.mean(D_train, axis=0)
-                ##Fit a model - OPTIMIZATION
+                # Fit a model - OPTIMIZATION
                 probSize = self.window_size * size_blocks
                 lamb = np.zeros((probSize, probSize)) + self.lambda_parameter
-                S = np.cov(np.transpose(D_train), bias=self.biased)
-                empirical_covariances[cluster] = S
+                S = np.cov(np.transpose(D_train), bias=self.biased)  # S is empirical covariance
 
                 rho = 1
                 solver = ADMMSolver(lamb, self.window_size, size_blocks, 1, S)
-                # apply to process pool
                 optRes[cluster] = solver(1000, 1e-6, 1e-6, True)
-                # optRes[cluster] = pool.apply_async(solver, (1000, 1e-6, 1e-6, False,))
-        return optRes
+        return optRes, cluster_mean_info, cluster_mean_stacked_info
 
     def stack_training_data(self, Data, n, num_train_points, training_indices):
         complete_D_train = np.zeros([num_train_points, self.window_size * n])
@@ -390,7 +407,8 @@ class TICC:
             if not isinstance(test_data, np.ndarray):
                 raise TypeError("input must be a numpy array!")
         else:
-            test_data = self.trained_model['complete_D_train']
+            # 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
+            test_data = self.complete_D_train
 
         # SMOOTHENING
         lle_all_points_clusters = self.smoothen_clusters(self.trained_model['cluster_mean_info'],
@@ -402,4 +420,4 @@ class TICC:
         # Update cluster points - using NEW smoothening
         clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty)
 
-        return (clustered_points)
+        return clustered_points
