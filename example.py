@@ -1,38 +1,20 @@
-from TICC_solver import TICC
+from TICC_solver import TICC, analyse_segments
 import numpy as np
 
 fname = "example_data.txt"
-number_of_clusters = 8
+number_of_clusters = 15
 # dataset has n = 10 variates
 window_size = 3
 ticc = TICC(window_size=window_size, number_of_clusters=number_of_clusters, lambda_parameter=11e-2, beta=600,
             maxIters=100, threshold=2e-5,
-            write_out_file=False, prefix_string="output_folder/", num_proc=1)
-(cluster_assignment, cluster_MRFs) = ticc.fit(input_file=fname)
+            write_out_file=False, prefix_string="output_folder/", num_proc=1, compute_BIC=True)
+cluster_assignment, cluster_MRFs, bic = ticc.fit(input_file=fname)
+
 
 # MY EDITS TO BETTER UNDERSTAND THE RESULTS
-list_of_lists = []
-current_cluster = int(cluster_assignment[0])
-new_list = []
-# some more useful output than cluster assignment
-for i in range(len(cluster_assignment)):
-    current_observations_cluster = int(cluster_assignment[i])
-    if current_observations_cluster != current_cluster:  # create new list
-        current_cluster = current_observations_cluster
-        list_of_lists.append(new_list)
-        new_list = []
-    new_list.append(current_cluster)
-list_of_lists.append(new_list)  # the last one
-print("Cluster assignment")
-print("Number of segments: " + str(len(list_of_lists)))
-repetition_of_cluster = [0] * number_of_clusters
-for clusterx_list in list_of_lists:
-    cluster_index = clusterx_list[0]
-    repetition_of_cluster[int(cluster_index)] += 1
-    print("Segment for cluster: " + str(cluster_index) + ", with number of observations: " + str(len(clusterx_list)))
-print("\n")
-print("Number of times cluster repeats (list is in order of cluster):")
-print(repetition_of_cluster)
+analyse_segments(cluster_assignment, number_of_clusters)
+print('\n')
+print("BIC: " + str(bic))
 
 # shape is a dictionary with a key for each of the 8 clusters with each an array of w*n x w*n where w=window size, n = no variants
 cluster_one_mfr = cluster_MRFs[1]
