@@ -46,7 +46,7 @@ def hex_to_rgb(value):
     return out
 
 
-def updateClusters(LLE_node_vals, switch_penalty=1):
+def updateClusters(LLE_node_vals, switch_penalty=1, allow_zero_cluster_in_between_none_zero: bool = True):
     """
     Takes in LLE_node_vals matrix and computes the path that minimizes
     the total cost over the path
@@ -85,23 +85,23 @@ def updateClusters(LLE_node_vals, switch_penalty=1):
 
         path[i + 1] = np.argmin(total_vals)
 
-    # return the computed path
-    # here is the problem that this algorithm can allocate 0 points to an earlier cluster and shift them all to a later
-    # one which makes no sense, to avoid this we check that clusters are being used in order and no cluster gets put
-    # to zero inbetween
-    max_cluster_num = int(np.amax(path))
-    cluster_num_assigned = list(set(path))
-    no_cluster_non_zero = len(cluster_num_assigned)
-    if max_cluster_num >= no_cluster_non_zero:  # a cluster in the middle has been assigned zero observations
-        cluster_num_should_be_assigned = list(range(no_cluster_non_zero))
-        missing_values = list(set(cluster_num_should_be_assigned).difference(cluster_num_assigned))
-        additional_values = list(set(cluster_num_assigned).difference(cluster_num_should_be_assigned))
-        missing_values.sort()
-        additional_values.sort()
-        assert len(missing_values) == len(additional_values)  # errm otherwise
-        for index, new_value in enumerate(missing_values):
-            old_value = additional_values[index]
-            path[path == old_value] = new_value
+    if not allow_zero_cluster_in_between_none_zero:
+        # here is the problem that this algorithm can allocate 0 points to an earlier cluster and shift them all to a later
+        # one which makes no sense, to avoid this we check that clusters are being used in order and no cluster gets put
+        # to zero inbetween
+        max_cluster_num = int(np.amax(path))
+        cluster_num_assigned = list(set(path))
+        no_cluster_non_zero = len(cluster_num_assigned)
+        if max_cluster_num >= no_cluster_non_zero:  # a cluster in the middle has been assigned zero observations
+            cluster_num_should_be_assigned = list(range(no_cluster_non_zero))
+            missing_values = list(set(cluster_num_should_be_assigned).difference(cluster_num_assigned))
+            additional_values = list(set(cluster_num_assigned).difference(cluster_num_should_be_assigned))
+            missing_values.sort()
+            additional_values.sort()
+            assert len(missing_values) == len(additional_values)  # errm otherwise
+            for index, new_value in enumerate(missing_values):
+                old_value = additional_values[index]
+                path[path == old_value] = new_value
 
     return path
 

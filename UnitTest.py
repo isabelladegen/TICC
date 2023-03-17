@@ -1,5 +1,5 @@
 import unittest
-from TICC_solver import TICC
+from TICC_solver import TICC, analyse_segments
 import numpy as np
 
 
@@ -7,9 +7,9 @@ class TestStringMethods(unittest.TestCase):
 
     def test_example(self):
         fname = "example_data.txt"
-        ticc = TICC(window_size = 1,number_of_clusters = 8, lambda_parameter = 11e-2, beta = 600, maxIters = 100,
-                    threshold = 2e-5, write_out_file = False, prefix_string = "output_folder/", num_proc=1)
-        (cluster_assignment, cluster_MRFs) = ticc.fit(input_file=fname)
+        ticc = TICC(window_size=1, number_of_clusters=8, lambda_parameter=11e-2, beta=600, maxIters=100,
+                    threshold=2e-5, write_out_file=False, prefix_string="output_folder/", num_proc=1)
+        (cluster_assignment, cluster_MRFs, bic) = ticc.fit(input_file=fname, reassign_points_to_zero_clusters=True)
         assign = np.loadtxt("UnitTest_Data/Results.txt")
         val = abs(assign - cluster_assignment)
         self.assertEqual(sum(val), 0)
@@ -38,58 +38,61 @@ class TestStringMethods(unittest.TestCase):
         test_streaming(5)
 
         for i in range(8):
-            mrf = np.loadtxt("UnitTest_Data/cluster_"+str(i)+".txt",delimiter=',')
+            mrf = np.loadtxt("UnitTest_Data/cluster_" + str(i) + ".txt", delimiter=',')
             try:
                 np.testing.assert_array_almost_equal(mrf, cluster_MRFs[i], decimal=3)
             except AssertionError:
-                #Test failed
-                self.assertTrue(1==0)
-
+                # Test failed
+                self.assertTrue(1 == 0)
 
     def test_multiExample(self):
         fname = "example_data.txt"
-        ticc = TICC(window_size = 5,number_of_clusters = 5, lambda_parameter = 11e-2, beta = 600, maxIters = 100,
-                    threshold = 2e-5, write_out_file = False, prefix_string = "output_folder/", num_proc=1)
-        (cluster_assignment, cluster_MRFs) = ticc.fit(input_file=fname)
+        ticc = TICC(window_size=5, number_of_clusters=5, lambda_parameter=11e-2, beta=600, maxIters=100,
+                    threshold=2e-5, write_out_file=False, prefix_string="output_folder/", num_proc=1)
+        (cluster_assignment, cluster_MRFs, big) = ticc.fit(input_file=fname, reassign_points_to_zero_clusters=True)
         assign = np.loadtxt("UnitTest_Data/multiResults.txt")
         val = abs(assign - cluster_assignment)
         self.assertEqual(sum(val), 0)
 
         for i in range(5):
-            mrf = np.loadtxt("UnitTest_Data/multiCluster_"+str(i)+".txt",delimiter=',')
+            mrf = np.loadtxt("UnitTest_Data/multiCluster_" + str(i) + ".txt", delimiter=',')
             try:
                 np.testing.assert_array_almost_equal(mrf, cluster_MRFs[i], decimal=3)
             except AssertionError:
-                #Test failed
-                self.assertTrue(1==0)
+                # Test failed
+                self.assertTrue(1 == 0)
 
     def test_biased_vs_unbiased(self):
         fname = "example_data.txt"
         unbiased_ticc = TICC(window_size=1, number_of_clusters=8, lambda_parameter=11e-2, beta=600, maxIters=100,
                              threshold=2e-5,
                              write_out_file=False, prefix_string="output_folder/", num_proc=1)
-        (unbiased_cluster_assignment, unbiased_cluster_MRFs) = unbiased_ticc.fit(input_file=fname)
+        (unbiased_cluster_assignment, unbiased_cluster_MRFs, bic) = unbiased_ticc.fit(input_file=fname,
+                                                                                      reassign_points_to_zero_clusters=True)
 
         biased_ticc = TICC(window_size=1, number_of_clusters=8, lambda_parameter=11e-2, beta=600, maxIters=100,
                            threshold=2e-5,
                            write_out_file=False, prefix_string="output_folder/", num_proc=1, biased=True)
-        (biased_cluster_assignment, biased_cluster_MRFs) = biased_ticc.fit(input_file=fname)
+        (biased_cluster_assignment, biased_cluster_MRFs, bic) = biased_ticc.fit(input_file=fname,
+                                                                                reassign_points_to_zero_clusters=True)
 
-        np.testing.assert_array_equal(np.array(biased_cluster_assignment), np.array(unbiased_cluster_assignment), "Biased assignment is not equel to unbiased assignment!")
+        np.testing.assert_array_equal(np.array(biased_cluster_assignment), np.array(unbiased_cluster_assignment),
+                                      "Biased assignment is not equel to unbiased assignment!")
 
     def test_failed_unbiased(self):
         with self.assertRaises(Exception) as context:
             # TICC will fail in Iteration 2, because cluster 9 has only one observation.
             fname = "example_data.txt"
-            ticc = TICC(window_size=1, number_of_clusters=50, lambda_parameter=11e-2, beta=600, maxIters=100,
+            number_of_clusters = 50
+            ticc = TICC(window_size=1, number_of_clusters=number_of_clusters, lambda_parameter=11e-2, beta=600,
+                        maxIters=100,
                         threshold=2e-5,
                         write_out_file=False, prefix_string="output_folder/", num_proc=1)
-            (cluster_assignment, cluster_MRFs) = ticc.fit(input_file=fname)
-
+            clustered_points, train_cluster_inverse, bic = ticc.fit(input_file=fname,
+                                                                    reassign_points_to_zero_clusters=True)
+            analyse_segments(clustered_points, number_of_clusters)
         self.assertTrue('This is broken {}'.format(context.exception))
 
 
 if __name__ == '__main__':
     unittest.main()
-
-

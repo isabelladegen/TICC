@@ -16,7 +16,8 @@ matplotlib.use('Agg')
 class TICC:
     def __init__(self, window_size=10, number_of_clusters=5, lambda_parameter=11e-2,
                  beta=400, maxIters=1000, threshold=2e-5, write_out_file=False,
-                 prefix_string="", num_proc=1, compute_BIC=False, cluster_reassignment=20, biased=False):
+                 prefix_string="", num_proc=1, compute_BIC=False, cluster_reassignment=20, biased=False,
+                 allow_zero_cluster_inbetween: bool = True):
         """
         Parameters:
             - window_size: size of the sliding window
@@ -43,6 +44,7 @@ class TICC:
         self.cluster_reassignment = cluster_reassignment
         self.num_blocks = self.window_size + 1
         self.biased = biased
+        self.allow_zero_cluster_inbetween = allow_zero_cluster_inbetween
         # training data (left over design): 2d ndarray of dimension (no_train-observations, w*n), example (19605, 30)
         self.complete_d_train = None  # gets assigned in fit
 
@@ -54,11 +56,13 @@ class TICC:
         np.set_printoptions(formatter={'float': lambda x: "{0:0.4f}".format(x)})
         np.random.seed(102)
 
-    def fit(self, input_file):
+    def fit(self, input_file, reassign_points_to_zero_clusters: bool = True, use_gmm_initialisation: bool = True):
         """
         Main method for TICC solver.
         Parameters:
             - input_file: location of the data file
+            :param use_gmm_initialisation: bool -> original True, but it's not mentioned in the paper and feels a bit like cheating
+            :param reassign_points_to_zero_clusters: bool -> original True, if points should be assigned to the empty clusters or not
         """
         assert self.maxIters > 0  # must have at least one iteration
         self.log_parameters()
@@ -85,15 +89,17 @@ class TICC:
                                                          training_indices)
 
         # Initialization
-        enforce_all_clusters_not_zero = False  # should 20 points be allocated to 0 clusters from it 2 onwards?
         # Gaussian Mixture
-        gmm = mixture.GaussianMixture(n_components=self.number_of_clusters, covariance_type="full")
-        gmm.fit(self.complete_d_train)
-        # clustered_points = gmm.predict(self.complete_d_train)  # -> this is the original starting point
+        if use_gmm_initialisation:
+            gmm = mixture.GaussianMixture(n_components=self.number_of_clusters, covariance_type="full")
+            gmm.fit(self.complete_d_train)
+            clustered_points = gmm.predict(self.complete_d_train)  # -> this is the original starting point
+        else:
+            # it seems to make more sense to start with all points in the same cluster then gmm assigned clusters
+            clustered_points = np.zeros(num_train_points)
 
         # ndarray of length observations and values index of cluster the observation belongs to, example (19605)
         # clustered_points = np.random.randint(self.number_of_clusters, size=num_train_points)
-        clustered_points = np.zeros(num_train_points)
         # clustered_points = np.ones(num_train_points)
 
         old_clustered_points = None  # points from last iteration
@@ -129,7 +135,8 @@ class TICC:
             lle_all_points_clusters = self.smoothen_clusters(computed_covariance, cluster_mean_stacked_info,
                                                              self.complete_d_train, time_series_col_size)
             # Update cluster points - using NEW smoothening
-            clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty)
+            clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty,
+                                              allow_zero_cluster_in_between_none_zero=self.allow_zero_cluster_inbetween)
 
             # save training result
             self.trained_model = {'computed_covariance': computed_covariance,
@@ -149,7 +156,7 @@ class TICC:
                 print("length of cluster #", cluster_num, "-------->",
                       sum([x == cluster_num for x in clustered_points]))
 
-            if enforce_all_clusters_not_zero:
+            if reassign_points_to_zero_clusters:
                 if iters != 0:
                     old_cluster_num__used = [x[1] for x in list(old_computed_covariance.keys())]
                     cluster_norms = [(np.linalg.norm(old_computed_covariance[self.number_of_clusters, i]), i) for i in
@@ -409,7 +416,7 @@ class TICC:
         print("num_cluster", self.number_of_clusters)
         print("num stacked", self.window_size)
 
-    def predict_clusters(self, test_data):
+    def predict_clusters(self, test_data, allow_zero_clusters_inbetween=True):
         """
         Given the current trained model, predict clusters.
 
@@ -430,7 +437,8 @@ class TICC:
                                                          self.trained_model['time_series_col_size'])
 
         # Update cluster points - using NEW smoothening
-        clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty)
+        clustered_points = updateClusters(lle_all_points_clusters, switch_penalty=self.switch_penalty,
+                                          allow_zero_cluster_in_between_none_zero=self.allow_zero_cluster_inbetween)
 
         return clustered_points
 
